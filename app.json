@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "مهامي",
+    "slug": "mahami",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "assetBundlePatterns": ["**/*"],
+    "android": {
+      "package": "com.mahami.app",
+      "versionCode": 1,
+      "permissions": ["POST_NOTIFICATIONS"]
+    }
+  }
+}
