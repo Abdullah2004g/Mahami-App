@@ -6,11 +6,24 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "assetBundlePatterns": ["**/*"],
+
     "android": {
-      "package": "com.mahami.app",
+      "package": "com.abdullah.mahami",
       "versionCode": 1,
-      "permissions": ["POST_NOTIFICATIONS"]
+      "permissions": [
+        "POST_NOTIFICATIONS"
+      ]
+    },
+
+    "plugins": [
+      "expo-font",
+      "expo-notifications"
+    ],
+
+    "extra": {
+      "eas": {
+        "projectId": "f775f46d-2a6f-4ab5-872e-3d61bfdd6674"
+      }
     }
   }
 }
