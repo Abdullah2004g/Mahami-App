@@ -1,232 +1,995 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, { useEffect, useState } from "react";
 import {
-  Alert, I18nManager, Platform, Pressable, SafeAreaView, ScrollView,
-  StyleSheet, Switch, Text, TextInput, View
-} from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import {Ionicons} from '@expo/vector-icons';
-import * as Notifications from 'expo-notifications';
-import {Audio} from 'expo-av';
-import {StatusBar} from 'expo-status-bar';
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  TextInput,
+  FlatList,
+  Switch,
+  Alert,
+  Platform
+} from "react-native";
 
-I18nManager.allowRTL(true);
-I18nManager.forceRTL(true);
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Ionicons } from "@expo/vector-icons";
+import * as Notifications from "expo-notifications";
+import { StatusBar } from "expo-status-bar";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false
   })
 });
 
-const COLORS = {
-  bg:'#F5F7FB', card:'#FFFFFF', text:'#172033', muted:'#718096',
-  primary:'#5B5FEF', success:'#21A366', danger:'#E34D59',
-  morning:'#FFF3C4', day:'#DDEEFF', evening:'#FCE1D3', night:'#202B4A'
-};
+const TASKS_KEY = "@mahami_tasks";
+const SETTINGS_KEY = "@mahami_settings";
 
-function getGreeting(date=new Date()) {
-  const h=date.getHours();
-  if(h>=5 && h<12) return ['صباح الخير 👋','أتمنى لك يوماً مليئاً بالإنجاز','☀️','morning'];
-  if(h>=12 && h<17) return ['نهارك سعيد ☀️','استمر في إنجاز مهامك','🌤️','day'];
-  if(h>=17 && h<22) return ['مساء الخير 🌙','حان وقت ترتيب يومك','🌅','evening'];
-  return ['مساء هادئ 🌙','استعد ليوم جديد','🌙','night'];
-}
-function pad(n){return String(n).padStart(2,'0')}
-function formatTime(d){
-  let h=d.getHours(), m=pad(d.getMinutes()), ap=h>=12?'م':'ص';
-  h=h%12||12; return `${h}:${m} ${ap}`;
-}
-function formatDate(d){
-  const days=['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
-  return `${days[d.getDay()]}، ${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`;
-}
+export default function App() {
+  const [screen, setScreen] = useState("home");
+  const [tasks, setTasks] = useState([]);
+  const [newTask, setNewTask] = useState("");
+  const [now, setNow] = useState(new Date());
 
-export default function App(){
-  const [now,setNow]=useState(new Date());
-  const [tasks,setTasks]=useState([]);
-  const [input,setInput]=useState('');
-  const [screen,setScreen]=useState('home');
-  const [theme,setTheme]=useState('light');
-  const [sounds,setSounds]=useState(true);
-  const [notifications,setNotifications]=useState(true);
-  const [duration,setDuration]=useState(25*60);
-  const [remaining,setRemaining]=useState(25*60);
-  const [running,setRunning]=useState(false);
+  const [settings, setSettings] = useState({
+    darkMode: false,
+    notifications: true,
+    sounds: true
+  });
 
-  useEffect(()=>{const t=setInterval(()=>setNow(new Date()),1000); return()=>clearInterval(t)},[]);
-  useEffect(()=>{(async()=>{
-    const saved=await AsyncStorage.getItem('mahami_tasks'); if(saved) setTasks(JSON.parse(saved));
-    const settings=await AsyncStorage.getItem('mahami_settings');
-    if(settings){const s=JSON.parse(settings); setTheme(s.theme||'light'); setSounds(s.sounds!==false); setNotifications(s.notifications!==false)}
-    if(Platform.OS!=='web') await Notifications.requestPermissionsAsync();
-  })()},[]);
-  useEffect(()=>{AsyncStorage.setItem('mahami_tasks',JSON.stringify(tasks))},[tasks]);
-  useEffect(()=>{AsyncStorage.setItem('mahami_settings',JSON.stringify({theme,sounds,notifications}))},[theme,sounds,notifications]);
+  const [timerMinutes, setTimerMinutes] = useState(25);
+  const [secondsLeft, setSecondsLeft] = useState(25 * 60);
+  const [timerRunning, setTimerRunning] = useState(false);
 
-  useEffect(()=>{
-    if(!running) return;
-    if(remaining<=0){
-      setRunning(false); setRemaining(duration);
-      if(sounds) playBeep();
-      if(notifications && Platform.OS!=='web') Notifications.scheduleNotificationAsync({
-        content:{title:'مهامي ⏰',body:'انتهى وقت التركيز 🎉',sound:'default'},
-        trigger:null
-      });
-      Alert.alert('انتهى وقت التركيز 🎉','أحسنت! خذ استراحة قصيرة.');
+  useEffect(() => {
+    loadData();
+    requestNotificationPermission();
+
+    const clock = setInterval(() => {
+      setNow(new Date());
+    }, 1000);
+
+    return () => clearInterval(clock);
+  }, []);
+
+  useEffect(() => {
+    if (!timerRunning) return;
+
+    if (secondsLeft <= 0) {
+      setTimerRunning(false);
+      finishTimer();
       return;
     }
-    const t=setInterval(()=>setRemaining(r=>r-1),1000); return()=>clearInterval(t);
-  },[running,remaining,duration,sounds,notifications]);
 
-  async function playBeep(){
-    try{
-      const {sound}=await Audio.Sound.createAsync(require('./assets/beep.mp3'));
-      await sound.playAsync();
-      setTimeout(()=>sound.unloadAsync(),1200);
-    }catch(e){}
-  }
+    const timer = setInterval(() => {
+      setSecondsLeft((value) => value - 1);
+    }, 1000);
 
-  const completed=tasks.filter(t=>t.done).length;
-  const remainingTasks=tasks.length-completed;
-  const [title,subtitle,emoji,period]=getGreeting(now);
-  const dark=theme==='dark';
+    return () => clearInterval(timer);
+  }, [timerRunning, secondsLeft]);
 
-  function addTask(){
-    const v=input.trim(); if(!v) return;
-    setTasks([{id:Date.now().toString(),title:v,done:false,created:new Date().toISOString()},...tasks]);
-    setInput('');
-  }
-  function toggleTask(id){
-    setTasks(tasks.map(t=>{
-      if(t.id!==id) return t;
-      const done=!t.done;
-      if(done){
-        if(sounds) playBeep();
-        if(notifications && Platform.OS!=='web') Notifications.scheduleNotificationAsync({
-          content:{title:'مهامي 🎉',body:'تم إنجاز المهمة',sound:'default'},trigger:null
-        });
+  const loadData = async () => {
+    try {
+      const savedTasks = await AsyncStorage.getItem(TASKS_KEY);
+      const savedSettings = await AsyncStorage.getItem(SETTINGS_KEY);
+
+      if (savedTasks) {
+        setTasks(JSON.parse(savedTasks));
       }
-      return {...t,done};
-    }));
+
+      if (savedSettings) {
+        setSettings(JSON.parse(savedSettings));
+      }
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  const saveTasks = async (data) => {
+    setTasks(data);
+    await AsyncStorage.setItem(TASKS_KEY, JSON.stringify(data));
+  };
+
+  const saveSettings = async (data) => {
+    setSettings(data);
+    await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(data));
+  };
+
+  const requestNotificationPermission = async () => {
+    if (Platform.OS === "android") {
+      await Notifications.setNotificationChannelAsync("default", {
+        name: "مهامي",
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 250, 250],
+        sound: "default"
+      });
+    }
+
+    const permissions = await Notifications.getPermissionsAsync();
+
+    if (permissions.status !== "granted") {
+      await Notifications.requestPermissionsAsync();
+    }
+  };
+
+  const addTask = async () => {
+    const title = newTask.trim();
+
+    if (!title) {
+      Alert.alert("تنبيه", "اكتب المهمة أولاً");
+      return;
+    }
+
+    const task = {
+      id: Date.now().toString(),
+      title,
+      completed: false,
+      createdAt: new Date().toISOString()
+    };
+
+    await saveTasks([task, ...tasks]);
+    setNewTask("");
+  };
+
+  const toggleTask = async (id) => {
+    const updated = tasks.map((task) =>
+      task.id === id
+        ? { ...task, completed: !task.completed }
+        : task
+    );
+
+    await saveTasks(updated);
+  };
+
+  const deleteTask = async (id) => {
+    const updated = tasks.filter((task) => task.id !== id);
+    await saveTasks(updated);
+  };
+
+  const deleteAllTasks = () => {
+    Alert.alert(
+      "حذف المهام",
+      "هل تريد حذف جميع المهام؟",
+      [
+        { text: "إلغاء", style: "cancel" },
+        {
+          text: "حذف",
+          style: "destructive",
+          onPress: async () => {
+            await saveTasks([]);
+          }
+        }
+      ]
+    );
+  };
+
+  const finishTimer = async () => {
+    if (settings.notifications) {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: "مهامي ⏰",
+          body: "انتهى وقت التركيز! خذ استراحة قصيرة."
+        },
+        trigger: null
+      });
+    }
+
+    Alert.alert("انتهى الوقت ⏰", "أحسنت! انتهت جلسة التركيز.");
+  };
+
+  const changeTimer = (minutes) => {
+    setTimerMinutes(minutes);
+    setSecondsLeft(minutes * 60);
+    setTimerRunning(false);
+  };
+
+  const resetTimer = () => {
+    setTimerRunning(false);
+    setSecondsLeft(timerMinutes * 60);
+  };
+
+  const formatTime = (seconds) => {
+    const min = Math.floor(seconds / 60);
+    const sec = seconds % 60;
+
+    return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  };
+
+  const hour = now.getHours();
+
+  let greeting = "";
+  let subtitle = "";
+  let icon = "sunny";
+
+  if (hour >= 5 && hour < 12) {
+    greeting = "صباح الخير 👋";
+    subtitle = "أتمنى لك يوماً مليئاً بالإنجاز";
+    icon = "sunny";
+  } else if (hour >= 12 && hour < 17) {
+    greeting = "نهارك سعيد ☀️";
+    subtitle = "استمر في إنجاز مهامك";
+    icon = "partly-sunny";
+  } else if (hour >= 17 && hour < 22) {
+    greeting = "مساء الخير 🌙";
+    subtitle = "حان وقت ترتيب يومك";
+    icon = "moon";
+  } else {
+    greeting = "مساء هادئ 🌙";
+    subtitle = "استعد ليوم جديد";
+    icon = "moon";
   }
-  function deleteTask(id){
-    Alert.alert('حذف المهمة','هل تريد حذف هذه المهمة؟',[
-      {text:'إلغاء',style:'cancel'},{text:'حذف',style:'destructive',onPress:()=>setTasks(tasks.filter(t=>t.id!==id))}
-    ]);
-  }
-  function clearAll(){
-    if(!tasks.length) return;
-    Alert.alert('حذف جميع المهام','سيتم حذف جميع المهام نهائياً.',[
-      {text:'إلغاء',style:'cancel'},{text:'حذف الكل',style:'destructive',onPress:()=>setTasks([])}
-    ]);
-  }
 
-  const bg = dark ? COLORS.night : ({morning:COLORS.morning,day:COLORS.day,evening:COLORS.evening,night:'#E7EBF7'}[period]);
-  const textColor=dark?'#FFF':COLORS.text;
-  const styles2=makeStyles(dark);
+  const completed = tasks.filter((task) => task.completed).length;
+  const remaining = tasks.length - completed;
 
-  return <SafeAreaView style={styles2.container}>
-    <StatusBar style={dark?'light':'dark'}/>
-    {screen==='home' && <ScrollView contentContainerStyle={{paddingBottom:100}}>
-      <View style={[styles2.header,{backgroundColor:bg}]}>
-        <View style={{flex:1}}>
-          <Text style={[styles2.greeting,{color:period==='night'&&!dark?'#172033':textColor}]}>{title}</Text>
-          <Text style={[styles2.subtitle,{color:period==='night'&&!dark?'#42506A':textColor}]}>{subtitle}</Text>
-          <Text style={[styles2.date,{color:period==='night'&&!dark?'#42506A':textColor}]}>{formatDate(now)}</Text>
-          <Text style={[styles2.clock,{color:period==='night'&&!dark?'#172033':textColor}]}>{formatTime(now)}</Text>
-        </View>
-        <Text style={styles2.bigEmoji}>{emoji}</Text>
+  const dateText = now.toLocaleDateString("ar-EG", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+
+  const dark = settings.darkMode;
+
+  const colors = {
+    background: dark ? "#101114" : "#F6F7FB",
+    card: dark ? "#1A1C21" : "#FFFFFF",
+    text: dark ? "#FFFFFF" : "#15171A",
+    secondary: dark ? "#A9ADB5" : "#6B7280",
+    border: dark ? "#2A2D34" : "#E7E9EE",
+    primary: "#4F46E5"
+  };
+
+  const renderTask = ({ item }) => (
+    <View
+      style={[
+        styles.taskCard,
+        {
+          backgroundColor: colors.card,
+          borderColor: colors.border
+        }
+      ]}
+    >
+      <TouchableOpacity
+        style={styles.checkButton}
+        onPress={() => toggleTask(item.id)}
+      >
+        <Ionicons
+          name={item.completed ? "checkmark-circle" : "ellipse-outline"}
+          size={27}
+          color={item.completed ? colors.primary : colors.secondary}
+        />
+      </TouchableOpacity>
+
+      <View style={styles.taskTextContainer}>
+        <Text
+          style={[
+            styles.taskTitle,
+            {
+              color: colors.text,
+              textDecorationLine: item.completed
+                ? "line-through"
+                : "none"
+            }
+          ]}
+        >
+          {item.title}
+        </Text>
+
+        <Text style={[styles.taskDate, { color: colors.secondary }]}>
+          {new Date(item.createdAt).toLocaleTimeString("ar-EG", {
+            hour: "2-digit",
+            minute: "2-digit"
+          })}
+        </Text>
       </View>
 
-      <View style={styles2.welcome}>
-        <Text style={styles2.welcomeTitle}>مرحباً بك في مهامي 👋</Text>
-        <Text style={styles2.muted}>رتب يومك وأنجز مهامك بسهولة</Text>
-      </View>
-
-      <View style={styles2.statsRow}>
-        <Stat title="إجمالي المهام" value={tasks.length} icon="list-outline" dark={dark}/>
-        <Stat title="المكتملة" value={completed} icon="checkmark-circle-outline" dark={dark}/>
-        <Stat title="المتبقية" value={remainingTasks} icon="time-outline" dark={dark}/>
-      </View>
-
-      <View style={styles2.addRow}>
-        <TextInput value={input} onChangeText={setInput} onSubmitEditing={addTask}
-          placeholder="اكتب مهمة جديدة..." placeholderTextColor={dark?'#9AA5BA':'#9AA5B8'}
-          style={styles2.input} returnKeyType="done"/>
-        <Pressable style={styles2.addBtn} onPress={addTask}><Text style={styles2.addText}>إضافة</Text></Pressable>
-      </View>
-
-      <View style={styles2.sectionHead}><Text style={styles2.sectionTitle}>مهامي اليوم</Text>
-        <Pressable onPress={()=>setScreen('tasks')}><Text style={styles2.link}>عرض الكل</Text></Pressable>
-      </View>
-
-      {tasks.slice(0,5).map(t=><TaskCard key={t.id} t={t} onToggle={()=>toggleTask(t.id)} onDelete={()=>deleteTask(t.id)} dark={dark}/>)}
-      {!tasks.length && <EmptyState dark={dark}/>}
-    </ScrollView>}
-
-    {screen==='tasks' && <ScrollView contentContainerStyle={{padding:18,paddingBottom:100}}>
-      <Text style={styles2.pageTitle}>المهام</Text>
-      <View style={styles2.addRow}><TextInput value={input} onChangeText={setInput} placeholder="اكتب مهمة جديدة..." placeholderTextColor={dark?'#9AA5BA':'#9AA5B8'} style={styles2.input}/><Pressable style={styles2.addBtn} onPress={addTask}><Text style={styles2.addText}>إضافة</Text></Pressable></View>
-      {tasks.map(t=><TaskCard key={t.id} t={t} onToggle={()=>toggleTask(t.id)} onDelete={()=>deleteTask(t.id)} dark={dark}/>)}
-      {!tasks.length && <EmptyState dark={dark}/>}
-      {!!tasks.length && <Pressable onPress={clearAll} style={styles2.clearBtn}><Text style={{color:COLORS.danger,fontWeight:'700'}}>حذف جميع المهام</Text></Pressable>}
-    </ScrollView>}
-
-    {screen==='focus' && <View style={styles2.focus}>
-      <Text style={styles2.pageTitle}>تايمر التركيز</Text>
-      <Text style={styles2.focusTime}>{pad(Math.floor(remaining/60))}:{pad(remaining%60)}</Text>
-      <Text style={styles2.muted}>اختر مدة التركيز</Text>
-      <View style={styles2.durationRow}>{[15,25,45,60].map(min=><Pressable key={min} onPress={()=>{setRunning(false);setDuration(min*60);setRemaining(min*60)}} style={[styles2.duration,{backgroundColor:duration===min*60?COLORS.primary:(dark?'#303B58':'#E9ECF7')}]}><Text style={{color:duration===min*60?'#FFF':textColor,fontWeight:'700'}}>{min} د</Text></Pressable>)}</View>
-      <View style={{flexDirection:'row',gap:10,marginTop:25}}>
-        <Pressable style={styles2.timerBtn} onPress={()=>setRunning(!running)}><Text style={styles2.timerBtnText}>{running?'إيقاف مؤقت':'بدء'}</Text></Pressable>
-        <Pressable style={styles2.resetBtn} onPress={()=>{setRunning(false);setRemaining(duration)}}><Text style={{fontWeight:'700',color:textColor}}>إعادة ضبط</Text></Pressable>
-      </View>
-    </View>}
-
-    {screen==='settings' && <ScrollView contentContainerStyle={{padding:18,paddingBottom:100}}>
-      <Text style={styles2.pageTitle}>الإعدادات</Text>
-      <SettingRow title="الصوت" subtitle="أصوات إكمال المهمة والمؤقت" value={sounds} setValue={setSounds} dark={dark}/>
-      <SettingRow title="الإشعارات" subtitle="الإشعارات المحلية" value={notifications} setValue={setNotifications} dark={dark}/>
-      <View style={styles2.settingCard}><Text style={styles2.settingTitle}>المظهر</Text>
-        <View style={{flexDirection:'row',gap:8,marginTop:12}}>
-          {['light','dark'].map(v=><Pressable key={v} onPress={()=>setTheme(v)} style={[styles2.themeBtn,{backgroundColor:theme===v?COLORS.primary:(dark?'#303B58':'#EDF0F7')}]}><Text style={{color:theme===v?'#FFF':textColor,fontWeight:'700'}}>{v==='light'?'فاتح':'داكن'}</Text></Pressable>)}
-        </View>
-      </View>
-      <Pressable onPress={clearAll} style={styles2.dangerCard}><Ionicons name="trash-outline" size={22} color={COLORS.danger}/><Text style={{color:COLORS.danger,fontWeight:'800'}}>حذف جميع المهام</Text></Pressable>
-    </ScrollView>}
-
-    <View style={styles2.nav}>
-      <NavItem icon="home-outline" label="الرئيسية" active={screen==='home'} onPress={()=>setScreen('home')} dark={dark}/>
-      <NavItem icon="checkmark-done-outline" label="المهام" active={screen==='tasks'} onPress={()=>setScreen('tasks')} dark={dark}/>
-      <NavItem icon="timer-outline" label="التركيز" active={screen==='focus'} onPress={()=>setScreen('focus')} dark={dark}/>
-      <NavItem icon="settings-outline" label="الإعدادات" active={screen==='settings'} onPress={()=>setScreen('settings')} dark={dark}/>
+      <TouchableOpacity onPress={() => deleteTask(item.id)}>
+        <Ionicons
+          name="trash-outline"
+          size={21}
+          color="#EF4444"
+        />
+      </TouchableOpacity>
     </View>
-  </SafeAreaView>
+  );
+
+  const HomeScreen = () => (
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.headerGreeting}>{greeting}</Text>
+          <Text style={styles.headerSubtitle}>{subtitle}</Text>
+          <Text style={styles.date}>{dateText}</Text>
+          <Text style={styles.clock}>
+            {now.toLocaleTimeString("ar-EG", {
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit"
+            })}
+          </Text>
+        </View>
+
+        <Ionicons name={icon} size={54} color="#FFFFFF" />
+      </View>
+
+      <View style={styles.welcomeCard}>
+        <Text style={[styles.welcomeTitle, { color: colors.text }]}>
+          مرحباً 👋
+        </Text>
+
+        <Text style={[styles.welcomeText, { color: colors.secondary }]}>
+          رتب يومك وأنجز مهامك بسهولة
+        </Text>
+      </View>
+
+      <View style={styles.statsRow}>
+        <StatCard title="إجمالي المهام" value={tasks.length} />
+        <StatCard title="المكتملة" value={completed} />
+        <StatCard title="المتبقية" value={remaining} />
+      </View>
+
+      <View
+        style={[
+          styles.addContainer,
+          {
+            backgroundColor: colors.card,
+            borderColor: colors.border
+          }
+        ]}
+      >
+        <TextInput
+          value={newTask}
+          onChangeText={setNewTask}
+          placeholder="اكتب مهمة جديدة..."
+          placeholderTextColor={colors.secondary}
+          style={[styles.input, { color: colors.text }]}
+          textAlign="right"
+        />
+
+        <TouchableOpacity
+          style={styles.addButton}
+          onPress={addTask}
+        >
+          <Ionicons name="add" size={22} color="#FFFFFF" />
+          <Text style={styles.addButtonText}>إضافة</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>
+        آخر المهام
+      </Text>
+
+      <FlatList
+        data={tasks.slice(0, 5)}
+        keyExtractor={(item) => item.id}
+        renderItem={renderTask}
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Ionicons
+              name="checkmark-done-circle-outline"
+              size={65}
+              color={colors.secondary}
+            />
+            <Text style={[styles.emptyText, { color: colors.secondary }]}>
+              لا توجد مهام حالياً
+            </Text>
+          </View>
+        }
+      />
+    </View>
+  );
+
+  const TasksScreen = () => (
+    <View style={styles.screen}>
+      <Text style={[styles.pageTitle, { color: colors.text }]}>
+        المهام
+      </Text>
+
+      <View
+        style={[
+          styles.addContainer,
+          {
+            backgroundColor: colors.card,
+            borderColor: colors.border
+          }
+        ]}
+      >
+        <TextInput
+          value={newTask}
+          onChangeText={setNewTask}
+          placeholder="اكتب مهمة جديدة..."
+          placeholderTextColor={colors.secondary}
+          style={[styles.input, { color: colors.text }]}
+          textAlign="right"
+        />
+
+        <TouchableOpacity
+          style={styles.addButton}
+          onPress={addTask}
+        >
+          <Ionicons name="add" size={22} color="#FFFFFF" />
+          <Text style={styles.addButtonText}>إضافة</Text>
+        </TouchableOpacity>
+      </View>
+
+      <FlatList
+        data={tasks}
+        keyExtractor={(item) => item.id}
+        renderItem={renderTask}
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Ionicons
+              name="clipboard-outline"
+              size={65}
+              color={colors.secondary}
+            />
+            <Text style={[styles.emptyText, { color: colors.secondary }]}>
+              لم تضف أي مهمة بعد
+            </Text>
+          </View>
+        }
+      />
+    </View>
+  );
+
+  const FocusScreen = () => (
+    <View style={styles.screen}>
+      <Text style={[styles.pageTitle, { color: colors.text }]}>
+        التركيز
+      </Text>
+
+      <View
+        style={[
+          styles.timerCard,
+          { backgroundColor: colors.card }
+        ]}
+      >
+        <Text style={[styles.timerLabel, { color: colors.secondary }]}>
+          جلسة التركيز
+        </Text>
+
+        <Text style={[styles.timer, { color: colors.text }]}>
+          {formatTime(secondsLeft)}
+        </Text>
+
+        <View style={styles.timerOptions}>
+          {[15, 25, 45, 60].map((minute) => (
+            <TouchableOpacity
+              key={minute}
+              onPress={() => changeTimer(minute)}
+              style={[
+                styles.timerOption,
+                timerMinutes === minute && styles.timerOptionActive
+              ]}
+            >
+              <Text
+                style={[
+                  styles.timerOptionText,
+                  timerMinutes === minute &&
+                    styles.timerOptionTextActive
+                ]}
+              >
+                {minute}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <View style={styles.timerButtons}>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={() => setTimerRunning(!timerRunning)}
+          >
+            <Ionicons
+              name={timerRunning ? "pause" : "play"}
+              size={22}
+              color="#FFFFFF"
+            />
+            <Text style={styles.primaryButtonText}>
+              {timerRunning ? "إيقاف" : "بدء"}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={resetTimer}
+          >
+            <Ionicons
+              name="refresh"
+              size={22}
+              color={colors.text}
+            />
+            <Text style={[styles.secondaryButtonText, { color: colors.text }]}>
+              إعادة
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  );
+
+  const SettingsScreen = () => (
+    <View style={styles.screen}>
+      <Text style={[styles.pageTitle, { color: colors.text }]}>
+        الإعدادات
+      </Text>
+
+      <SettingRow
+        title="الوضع الداكن"
+        icon="moon-outline"
+        value={settings.darkMode}
+        onChange={(value) =>
+          saveSettings({
+            ...settings,
+            darkMode: value
+          })
+        }
+        colors={colors}
+      />
+
+      <SettingRow
+        title="الإشعارات"
+        icon="notifications-outline"
+        value={settings.notifications}
+        onChange={(value) =>
+          saveSettings({
+            ...settings,
+            notifications: value
+          })
+        }
+        colors={colors}
+      />
+
+      <TouchableOpacity
+        style={[
+          styles.deleteAllButton,
+          { backgroundColor: colors.card }
+        ]}
+        onPress={deleteAllTasks}
+      >
+        <Ionicons name="trash-outline" size={22} color="#EF4444" />
+        <Text style={styles.deleteAllText}>
+          حذف جميع المهام
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  return (
+    <View
+      style={[
+        styles.container,
+        { backgroundColor: colors.background }
+      ]}
+    >
+      <StatusBar style={dark ? "light" : "dark"} />
+
+      {screen === "home" && <HomeScreen />}
+      {screen === "tasks" && <TasksScreen />}
+      {screen === "focus" && <FocusScreen />}
+      {screen === "settings" && <SettingsScreen />}
+
+      <View
+        style={[
+          styles.bottomNav,
+          {
+            backgroundColor: colors.card,
+            borderTopColor: colors.border
+          }
+        ]}
+      >
+        <NavButton
+          icon="home-outline"
+          active={screen === "home"}
+          title="الرئيسية"
+          onPress={() => setScreen("home")}
+          colors={colors}
+        />
+
+        <NavButton
+          icon="list-outline"
+          active={screen === "tasks"}
+          title="المهام"
+          onPress={() => setScreen("tasks")}
+          colors={colors}
+        />
+
+        <NavButton
+          icon="timer-outline"
+          active={screen === "focus"}
+          title="التركيز"
+          onPress={() => setScreen("focus")}
+          colors={colors}
+        />
+
+        <NavButton
+          icon="settings-outline"
+          active={screen === "settings"}
+          title="الإعدادات"
+          onPress={() => setScreen("settings")}
+          colors={colors}
+        />
+      </View>
+    </View>
+  );
 }
 
-function Stat({title,value,icon,dark}){return <View style={makeStyles(dark).stat}><Ionicons name={icon} size={23} color={COLORS.primary}/><Text style={makeStyles(dark).statValue}>{value}</Text><Text style={makeStyles(dark).statTitle}>{title}</Text></View>}
-function TaskCard({t,onToggle,onDelete,dark}){
-  const s=makeStyles(dark);
-  return <View style={s.task}><Pressable onPress={onToggle} style={[s.checkbox,{backgroundColor:t.done?COLORS.success:'transparent',borderColor:t.done?COLORS.success:COLORS.muted}]}>{t.done&&<Ionicons name="checkmark" size={16} color="#FFF"/>}</Pressable><View style={{flex:1}}><Text style={[s.taskTitle,t.done&&{textDecorationLine:'line-through',color:COLORS.muted}]}>{t.title}</Text><Text style={s.taskDate}>{formatTime(new Date(t.created))}</Text></View><Pressable onPress={onDelete}><Ionicons name="trash-outline" size={21} color={COLORS.danger}/></Pressable></View>
+function StatCard({ title, value }) {
+  return (
+    <View style={styles.statCard}>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statTitle}>{title}</Text>
+    </View>
+  );
 }
-function EmptyState({dark}){return <View style={makeStyles(dark).empty}><Text style={{fontSize:45}}>📝</Text><Text style={makeStyles(dark).emptyTitle}>لا توجد مهام حالياً</Text><Text style={makeStyles(dark).muted}>ابدأ بإضافة أول مهمة لك اليوم 🚀</Text></View>}
-function SettingRow({title,subtitle,value,setValue,dark}){return <View style={makeStyles(dark).settingCard}><View style={{flex:1}}><Text style={makeStyles(dark).settingTitle}>{title}</Text><Text style={makeStyles(dark).muted}>{subtitle}</Text></View><Switch value={value} onValueChange={setValue}/></View>}
-function NavItem({icon,label,active,onPress,dark}){return <Pressable onPress={onPress} style={{alignItems:'center',flex:1}}><Ionicons name={icon} size={23} color={active?COLORS.primary:(dark?'#AAB4C8':'#7B8497')}/><Text style={{fontSize:11,color:active?COLORS.primary:(dark?'#AAB4C8':'#7B8497'),marginTop:3}}>{label}</Text></Pressable>}
 
-function makeStyles(dark){
- const c=dark?'#FFF':COLORS.text, card=dark?'#27324D':'#FFF', bg=dark?'#151B2B':COLORS.bg, muted=dark?'#AAB4C8':COLORS.muted;
- return StyleSheet.create({
-  container:{flex:1,backgroundColor:bg},
-  header:{margin:12,borderRadius:25,padding:22,minHeight:180,flexDirection:'row',alignItems:'center',overflow:'hidden'},
-  greeting:{fontSize:29,fontWeight:'900',marginBottom:5},subtitle:{fontSize:14,fontWeight:'600'},date:{fontSize:13,marginTop:18},clock:{fontSize:22,fontWeight:'800',marginTop:3},bigEmoji:{fontSize:64},
-  welcome:{marginHorizontal:16,marginTop:4,padding:18,backgroundColor:card,borderRadius:20},welcomeTitle:{fontSize:20,fontWeight:'800',color:c},muted:{color:muted,fontSize:13,marginTop:4},
-  statsRow:{flexDirection:'row',gap:9,padding:16},stat:{flex:1,backgroundColor:card,borderRadius:18,padding:13,alignItems:'center'},statValue:{fontSize:25,fontWeight:'900',color:c,marginTop:3},statTitle:{fontSize:11,color:muted,marginTop:3,textAlign:'center'},
-  addRow:{flexDirection:'row',gap:8,paddingHorizontal:16,marginTop:2},input:{flex:1,backgroundColor:card,borderRadius:15,paddingHorizontal:15,height:50,color:c,textAlign:'right'},addBtn:{backgroundColor:COLORS.primary,borderRadius:15,height:50,paddingHorizontal:20,alignItems:'center',justifyContent:'center'},addText:{color:'#FFF',fontWeight:'800'},
-  sectionHead:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',paddingHorizontal:18,marginTop:22,marginBottom:10},sectionTitle:{fontSize:20,fontWeight:'900',color:c},link:{color:COLORS.primary,fontWeight:'700'},
-  task:{marginHorizontal:16,marginBottom:9,padding:15,backgroundColor:card,borderRadius:17,flexDirection:'row',alignItems:'center',gap:12},checkbox:{width:24,height:24,borderWidth:2,borderRadius:8,alignItems:'center',justifyContent:'center'},taskTitle:{fontSize:15,fontWeight:'700',color:c,textAlign:'right'},taskDate:{fontSize:11,color:muted,marginTop:4,textAlign:'right'},
-  empty:{margin:16,padding:35,alignItems:'center',backgroundColor:card,borderRadius:20},emptyTitle:{fontSize:18,fontWeight:'800',color:c,marginTop:10},
-  pageTitle:{fontSize:29,fontWeight:'900',color:c,marginBottom:20},focus:{flex:1,alignItems:'center',paddingTop:45},focusTime:{fontSize:64,fontWeight:'900',color:c,marginVertical:25},durationRow:{flexDirection:'row',gap:8,marginTop:15},duration:{paddingHorizontal:16,paddingVertical:12,borderRadius:14},timerBtn:{backgroundColor:COLORS.primary,paddingHorizontal:35,paddingVertical:15,borderRadius:15},timerBtnText:{color:'#FFF',fontWeight:'900'},resetBtn:{backgroundColor:card,paddingHorizontal:25,paddingVertical:15,borderRadius:15},
-  settingCard:{backgroundColor:card,borderRadius:18,padding:18,marginBottom:12,flexDirection:'row',alignItems:'center'},settingTitle:{fontSize:17,fontWeight:'800',color:c},themeBtn:{paddingHorizontal:25,paddingVertical:12,borderRadius:13},dangerCard:{backgroundColor:card,borderRadius:18,padding:18,flexDirection:'row',gap:12,alignItems:'center'},clearBtn:{margin:16,padding:15,alignItems:'center',backgroundColor:card,borderRadius:15},
-  nav:{position:'absolute',bottom:0,left:0,right:0,height:70,backgroundColor:card,borderTopWidth:1,borderTopColor:dark?'#303B58':'#E7EAF0',flexDirection:'row',alignItems:'center',paddingHorizontal:8}
- });
+function SettingRow({ title, icon, value, onChange, colors }) {
+  return (
+    <View
+      style={[
+        styles.settingRow,
+        {
+          backgroundColor: colors.card,
+          borderColor: colors.border
+        }
+      ]}
+    >
+      <Ionicons
+        name={icon}
+        size={25}
+        color={colors.text}
+      />
+
+      <Text style={[styles.settingTitle, { color: colors.text }]}>
+        {title}
+      </Text>
+
+      <Switch
+        value={value}
+        onValueChange={onChange}
+      />
+    </View>
+  );
 }
+
+function NavButton({ icon, active, title, onPress, colors }) {
+  return (
+    <TouchableOpacity
+      style={styles.navButton}
+      onPress={onPress}
+    >
+      <Ionicons
+        name={icon}
+        size={24}
+        color={active ? colors.primary : colors.secondary}
+      />
+
+      <Text
+        style={[
+          styles.navText,
+          {
+            color: active
+              ? colors.primary
+              : colors.secondary
+          }
+        ]}
+      >
+        {title}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1
+  },
+
+  screen: {
+    flex: 1,
+    paddingHorizontal: 18,
+    paddingTop: 55,
+    paddingBottom: 90
+  },
+
+  header: {
+    backgroundColor: "#4F46E5",
+    borderRadius: 25,
+    padding: 22,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 15
+  },
+
+  headerGreeting: {
+    color: "#FFFFFF",
+    fontSize: 26,
+    fontWeight: "800",
+    textAlign: "right"
+  },
+
+  headerSubtitle: {
+    color: "#E0E7FF",
+    fontSize: 14,
+    marginTop: 5,
+    textAlign: "right"
+  },
+
+  date: {
+    color: "#E0E7FF",
+    fontSize: 12,
+    marginTop: 10,
+    textAlign: "right"
+  },
+
+  clock: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "700",
+    marginTop: 3,
+    textAlign: "right"
+  },
+
+  welcomeCard: {
+    paddingVertical: 15
+  },
+
+  welcomeTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    textAlign: "right"
+  },
+
+  welcomeText: {
+    marginTop: 4,
+    textAlign: "right"
+  },
+
+  statsRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 15
+  },
+
+  statCard: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    paddingVertical: 17,
+    alignItems: "center"
+  },
+
+  statValue: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#4F46E5"
+  },
+
+  statTitle: {
+    fontSize: 11,
+    color: "#6B7280",
+    marginTop: 4
+  },
+
+  addContainer: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 18
+  },
+
+  input: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    fontSize: 15
+  },
+
+  addButton: {
+    backgroundColor: "#4F46E5",
+    borderRadius: 13,
+    paddingHorizontal: 15,
+    paddingVertical: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4
+  },
+
+  addButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700"
+  },
+
+  sectionTitle: {
+    fontSize: 19,
+    fontWeight: "800",
+    marginBottom: 10,
+    textAlign: "right"
+  },
+
+  pageTitle: {
+    fontSize: 29,
+    fontWeight: "800",
+    marginBottom: 20,
+    textAlign: "right"
+  },
+
+  taskCard: {
+    borderWidth: 1,
+    borderRadius: 17,
+    padding: 14,
+    marginBottom: 9,
+    flexDirection: "row",
+    alignItems: "center"
+  },
+
+  checkButton: {
+    marginRight: 10
+  },
+
+  taskTextContainer: {
+    flex: 1
+  },
+
+  taskTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    textAlign: "right"
+  },
+
+  taskDate: {
+    fontSize: 11,
+    marginTop: 3,
+    textAlign: "right"
+  },
+
+  empty: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingTop: 55
+  },
+
+  emptyText: {
+    marginTop: 12,
+    fontSize: 15
+  },
+
+  timerCard: {
+    borderRadius: 25,
+    padding: 25,
+    alignItems: "center"
+  },
+
+  timerLabel: {
+    fontSize: 15
+  },
+
+  timer: {
+    fontSize: 62,
+    fontWeight: "800",
+    marginVertical: 20
+  },
+
+  timerOptions: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 25
+  },
+
+  timerOption: {
+    paddingHorizontal: 15,
+    paddingVertical: 9,
+    borderRadius: 12,
+    backgroundColor: "#E5E7EB"
+  },
+
+  timerOptionActive: {
+    backgroundColor: "#4F46E5"
+  },
+
+  timerOptionText: {
+    fontWeight: "700",
+    color: "#374151"
+  },
+
+  timerOptionTextActive: {
+    color: "#FFFFFF"
+  },
+
+  timerButtons: {
+    flexDirection: "row",
+    gap: 10
+  },
+
+  primaryButton: {
+    backgroundColor: "#4F46E5",
+    paddingHorizontal: 25,
+    paddingVertical: 13,
+    borderRadius: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7
+  },
+
+  primaryButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "800"
+  },
+
+  secondaryButton: {
+    paddingHorizontal: 22,
+    paddingVertical: 13,
+    borderRadius: 14,
+    backgroundColor: "#E5E7EB",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7
+  },
+
+  secondaryButtonText: {
+    fontWeight: "800"
+  },
+
+  settingRow: {
+    borderWidth: 1,
+    borderRadius: 17,
+    padding: 16,
+    marginBottom: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12
+  },
+
+  settingTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "700",
+    textAlign: "right"
+  },
+
+  deleteAllButton: {
+    marginTop: 10,
+    padding: 17,
+    borderRadius: 17,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8
+  },
+
+  deleteAllText: {
+    color: "#EF4444",
+    fontWeight: "800"
+  },
+
+  bottomNav: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 75,
+    borderTopWidth: 1,
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "center"
+  },
+
+  navButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 70
+  },
+
+  navText: {
+    fontSize: 10,
+    marginTop: 3,
+    fontWeight: "700"
+  }
+});
