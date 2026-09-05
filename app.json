@@ -2,28 +2,16 @@
   "expo": {
     "name": "مهامي",
     "slug": "mahami",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-
     "android": {
       "package": "com.abdullah.mahami",
-      "versionCode": 1,
-      "permissions": [
-        "POST_NOTIFICATIONS"
-      ]
+      "versionCode": 2,
+      "adaptiveIcon": {"backgroundColor":"#6C63FF"}
     },
-
-    "plugins": [
-      "expo-font",
-      "expo-notifications"
-    ],
-
-    "extra": {
-      "eas": {
-        "projectId": "f775f46d-2a6f-4ab5-872e-3d61bfdd6674"
-      }
-    }
+    "plugins": ["expo-notifications"],
+    "extra": {"eas":{"projectId":"f775f46d-2a6f-4ab5-872e-3d61bfdd6674"}}
   }
 }
